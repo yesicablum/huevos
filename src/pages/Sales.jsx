@@ -1,32 +1,196 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import '../App.css';
+import FormSection from '../components/FormSection';
+import SaleSummary from '../components/SaleSummary';
+import { downloadInvoice, generateInvoice } from '../components/invoice';
+
+const priceTable = {
+    red: {
+        A: 12000,
+        AA: 13500,
+        B: 11000,
+        EXTRA: 15000,
+    },
+    white: {
+        A: 10000,
+        AA: 11500,
+        B: 9500,
+        EXTRA: 14000,
+    },
+};
 
 export default function Sales() {
     const [form, setForm] = useState({
         client: '',
+        cedula: '',
+        clientType: '',
         color: '',
         size: '',
         unit: 'cubeta',
         quantity: '',
     });
+    const [stock, setStock] = useState(null);
+    const [stockError, setStockError] = useState('');
+    const [loading, setLoading] = useState(false);
+    const [message, setMessage] = useState({ text: '', type: '' });
 
     const [cart, setCart] = useState([]);
     const IVA = 0.05;
+
+    useEffect(() => {
+        const { color, size } = form;
+        if (color && size) {
+            fetch(`https://app-huevos-backend.onrender.com/consultar_stock?tipo_huevo=${color}&tamaño=${size}`)
+                .then(res => {
+                    if (!res.ok) throw new Error('Stock no disponible');
+                    return res.json();
+                })
+                .then(data => {
+                    setStock(data.stock);
+                    setStockError('');
+                })
+                .catch(() => {
+                    setStock(null);
+                    setStockError('No hay stock disponible para este tipo y tamaño.');
+                });
+        } else {
+            setStock(null);
+            setStockError('');
+        }
+    }, [form.color, form.size]);
 
     const handleChange = e => {
         const { name, value } = e.target;
         setForm({ ...form, [name]: value });
     };
 
+    const calculatePrice = () => {
+        const { color, size, unit } = form;
+        if (!color || !size) return 0;
+
+        const basePrice = priceTable[color]?.[size] || 0;
+        const multiplier = unit === 'cubeta' ? 30 : 12;
+
+        return basePrice * multiplier;
+    };
+
     const addToCart = () => {
+        const totalUnits = getTotalUnits();
+        if (totalUnits > stock) {
+            alert('La cantidad supera el stock disponible');
+            return;
+        }
+
         const item = {
             color: form.color,
             size: form.size,
             unit: form.unit,
             quantity: parseInt(form.quantity),
-            price: 18000, // ejemplo fijo, podrías calcular según unidad
+            price: calculatePrice(),
         };
         setCart([...cart, item]);
+    };
+
+    const getTotalUnits = () => {
+        if (!form.quantity) return 0;
+        const unitSize = form.unit === 'cubeta' ? 30 : 12;
+        return parseInt(form.quantity) * unitSize;
+    };
+
+    const handleInvoice = () => {
+        // Datos proporcionados
+        const itemData = {
+            color: form.color,
+            size: form.size,
+            unit: form.unit,
+            quantity: parseInt(form.quantity),
+            price: calculatePrice(),
+        };
+        // Crear objeto completo para la venta
+        const sale = {
+            client: {
+            name: form.client,
+            type: form.clientType,
+            identification: form.cedula,
+            },
+            items: [
+            {
+                ...itemData,
+                unitPrice: itemData.price,
+                subtotal: itemData.price * itemData.quantity
+            }
+            ],
+            subtotal: itemData.price * itemData.quantity,
+            iva: itemData.price * itemData.quantity * IVA,
+            total: itemData.price * itemData.quantity * (1 + IVA),
+            date: new Date()
+        };
+        // Generar la factura
+        const invoice = generateInvoice(sale);
+        console.log(invoice);
+        // Para descargar la factura
+        downloadInvoice(invoice, sale.client.name);
+    };
+
+    const completeSale = async () => {
+        // Validaciones básicas
+        if (!form.client || !form.cedula || !form.clientType || cart.length === 0) {
+            setMessage({ text: 'Complete todos los campos y añada productos al carrito', type: 'error' });
+            return;
+        }
+
+        setLoading(true);
+        setMessage({ text: '', type: '' });
+
+        try {
+            // Procesar cada item del carrito
+            for (const item of cart) {
+                const endpoint = form.clientType.toLowerCase() === 'juridica'
+                    ? 'https://app-huevos-backend.onrender.com/venta_huevos_juridica'
+                    : 'https://app-huevos-backend.onrender.com/venta_huevos';
+
+                const saleData = {
+                    tipo_cliente: form.clientType.toLowerCase(),
+                    unidad: item.unit,
+                    tipo_huevo: item.color,
+                    tamaño: item.size,
+                    cantidad: item.quantity
+                };
+
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(saleData)
+                });
+
+                const result = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(result.error || 'Error al procesar la venta');
+                }
+            }
+
+            // Si todo fue exitoso
+            setMessage({ text: 'Venta registrada correctamente', type: 'success' });
+            handleInvoice();
+            // Limpiar el carrito y resetear el formulario
+            setCart([]);
+            setForm({
+                client: '',
+                cedula: '',
+                clientType: '',
+                color: '',
+                size: '',
+                unit: 'cubeta',
+                quantity: '',
+            });
+        } catch (error) {
+            setMessage({ text: error.message, type: 'error' });
+        } finally {
+            setLoading(false);
+        }
     };
 
     const subtotal = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
@@ -38,110 +202,34 @@ export default function Sales() {
             <h1>🛒 Ventas</h1>
             <p>Realice ventas de huevos y genere facturas para sus clientes.</p>
 
+            {message.text && (
+                <div className={`message ${message.type}`}>
+                    {message.text}
+                </div>
+            )}
+
             <div className="sales-main">
                 {/* Formulario */}
-                <div className="sales-form">
-                    <h2>Nueva Venta</h2>
-                    <p>Seleccione el cliente y los productos para realizar la venta</p>
-
-                    <label>Cliente</label>
-                    <select name="client" value={form.client} onChange={handleChange}>
-                        <option value="">Seleccione</option>
-                        <option value="María López">María López (Persona Natural)</option>
-                    </select>
-                    <small>Cliente natural: Puede comprar por cubeta o docena</small>
-
-                    <div className="row">
-                        <div>
-                            <label>Color</label>
-                            <select name="color" value={form.color} onChange={handleChange}>
-                                <option value="">Seleccione</option>
-                                <option value="Rojo">Rojo</option>
-                                <option value="Blanco">Blanco</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label>Tamaño</label>
-                            <select name="size" value={form.size} onChange={handleChange}>
-                                <option value="">Seleccione</option>
-                                <option value="A">A</option>
-                                <option value="AA">AA</option>
-                                <option value="B">B</option>
-                                <option value="EXTRA">EXTRA</option>
-                            </select>
-                        </div>
-                    </div>
-
-                    <div className="row">
-                        <div>
-                            <label>Unidad de Venta</label>
-                            <div className="radio-group">
-                                <label>
-                                    <input
-                                        type="radio"
-                                        name="unit"
-                                        value="cubeta"
-                                        checked={form.unit === 'cubeta'}
-                                        onChange={handleChange}
-                                    />
-                                    Cubeta (30 unidades)
-                                </label>
-                                <label>
-                                    <input
-                                        type="radio"
-                                        name="unit"
-                                        value="docena"
-                                        checked={form.unit === 'docena'}
-                                        onChange={handleChange}
-                                    />
-                                    Docena (12 unidades)
-                                </label>
-                            </div>
-                        </div>
-                        <div>
-                            <label>Cantidad</label>
-                            <input
-                                type="number"
-                                name="quantity"
-                                value={form.quantity}
-                                onChange={handleChange}
-                            />
-                            <small>Seleccione color, tamaño y unidad para ver precios</small>
-                        </div>
-                    </div>
-
-                    <button className="btn-add" onClick={addToCart}>➕ Añadir al Carrito</button>
-                </div>
+                <FormSection
+                    form={form}
+                    handleChange={handleChange}
+                    stock={stock}
+                    stockError={stockError}
+                    getTotalUnits={getTotalUnits}
+                    addToCart={addToCart}
+                />
 
                 {/* Resumen */}
-                <div className="sales-summary">
-                    <h2>Resumen de Venta</h2>
-                    <p>Cliente: {form.client}</p>
+                <SaleSummary
+                    form={form}
+                    cart={cart}
+                    subtotal={subtotal}
+                    tax={tax}
+                    total={total}
+                    completeSale={completeSale}
+                    loading={loading}
+                />
 
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Producto</th>
-                                <th>Subtotal</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {cart.map((item, i) => (
-                                <tr key={i}>
-                                    <td>{item.color} {item.size} <br /><small>{item.quantity} {item.unit}s</small></td>
-                                    <td>${(item.quantity * item.price).toLocaleString()}</td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-
-                    <div className="summary-totals">
-                        <p>Subtotal: <b>${subtotal.toLocaleString()}</b></p>
-                        <p>IVA (5%): <b>${tax.toLocaleString()}</b></p>
-                        <h3>Total: ${total.toLocaleString()}</h3>
-                        <button className="btn-complete">🧾 Completar Venta</button>
-                    </div>
-                </div>
             </div>
         </div>
     );

@@ -22,10 +22,10 @@ const RegisterEggs = () => {
         }
 
         try {
-            await axios.post('http://localhost:8000/api/inventory/register/', {
-                color,
-                size,
-                count: parseInt(count),
+            await axios.post('https://app-huevos-backend.onrender.com/registro_huevos', {
+                tipo_huevo: color,
+                tamaño: size,
+                cantidad: parseInt(count),
             });
             alert('Huevos registrados exitosamente.');
             clearForm();
